@@ -43,6 +43,19 @@ impl<'a> Value<'a> {
     }
 }
 
+impl<'a> PartialEq for Value<'a> {
+    fn eq(&self, other: &Value<'a>) -> bool {
+        match (self, other) {
+            (&Value::StringLiteral(ref left), &Value::StringLiteral(ref right)) => left == right,
+            (&Value::NumberLiteral(left), &Value::NumberLiteral(right)) => left == right,
+            (&Value::List(ref left), &Value::List(ref right)) => left == right,
+            (&Value::Function(_, ref left_args, ref left_body), &Value::Function(_, ref right_args, ref right_body)) => left_args == right_args && left_body == right_body,
+            (&Value::BuiltinFunction(left), &Value::BuiltinFunction(right)) => left as *mut BuiltinFn == right as *mut BuiltinFn,
+            _ => false,
+        }
+    }
+}
+
 impl<'a> fmt::Show for Value<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
