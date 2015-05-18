@@ -1,119 +1,126 @@
+use std::io::prelude::*;
 use lexer::{Lexer, Token};
 
-#[deriving(Clone, Show, PartialEq)]
-pub enum Node<'a> {
-    Atom(&'a str),
-    StringLiteral(&'a str),
-    NumberLiteral(f64),
-    List(Vec<Node<'a>>),
+#[derive(Clone, Debug, PartialEq)]
+pub enum Node {
+    List(Vec<Node>),
+    Atom(String),
+    String(String),
+    Number(f64),
 }
 
-impl<'a> Node<'a> {
-    pub fn to_src(&self) -> String {
-        match *self {
-            Node::Atom(name) => name.to_string(),
-            Node::StringLiteral(value) => format!("\"{}\"", value),
-            Node::NumberLiteral(value) => format!("{}", value),
-            Node::List(ref items) => {
-                let items: Vec<String> = items.iter().map(|item| item.to_src()).collect();
-                format!("({})", items.connect(" "))
-            }
-        }
-    }
+pub struct Parser<R: Read> {
+    lexer: Lexer<R>,
+    current: Option<Token>,
 }
 
-#[deriving(Clone)]
-pub struct Parser<'a> {
-    lexer: Lexer<'a>,
-}
-
-impl<'a> Parser<'a> {
-    pub fn new(input: &'a str) -> Parser<'a> {
-        let mut lexer = Lexer::new(input);
-        lexer.consume();
-
-        Parser {
+impl<R: Read> Parser<R> {
+    pub fn new(lexer: Lexer<R>) -> Parser<R> {
+        let mut parser = Parser {
             lexer: lexer,
+            current: None,
+        };
+        parser.consume();
+        parser
+    }
+
+    pub fn current(&self) -> Option<&Token> {
+        self.current.as_ref()
+    }
+
+    fn consume(&mut self) -> Option<Token> {
+        let current = self.current.take();
+        self.current = self.lexer.next();
+        current
+    }
+
+    fn expect(&mut self, token: Token) -> bool {
+        if self.current() == Some(&token) {
+            self.consume();
+            true
+        } else {
+            false
         }
     }
 
-    pub fn parse(&mut self) -> Option<Node<'a>> {
-        match self.lexer.current {
-            Some(Token::LeftParen) => {
-                self.lexer.consume();
+    pub fn parse(&mut self) -> Option<Node> {
+        self.parse_node()
+    }
 
-                let items = self.parse_list();
+    fn parse_node(&mut self) -> Option<Node> {
+        let current = match self.current.take() {
+            Some(token) => token,
+            None => return None,
+        };
 
-                match self.lexer.current {
-                    Some(Token::RightParen) => {
-                        self.lexer.consume();
-                        Some(Node::List(items))
-                    }
-                    _ => return None,
-                }
-            }
-            Some(Token::Atom(name)) => {
-                self.lexer.consume();
+        match current {
+            Token::LeftParen => self.parse_list(),
+            Token::Ident(name) => {
+                self.consume();
                 Some(Node::Atom(name))
             }
-            Some(Token::StringLiteral(value)) => {
-                self.lexer.consume();
-                Some(Node::StringLiteral(value))
+            Token::String(value) => {
+                self.consume();
+                Some(Node::String(value))
             }
-            Some(Token::NumberLiteral(value)) => {
-                self.lexer.consume();
-                Some(Node::NumberLiteral(value))
+            Token::Number(value) => {
+                self.consume();
+                Some(Node::Number(value))
             }
-            _ => None,
+            _ => {
+                self.current = Some(current);
+                None
+            }
         }
     }
-}
 
-impl<'a> Parser<'a> {
-    fn parse_list(&mut self) -> Vec<Node<'a>> {
+    fn parse_list(&mut self) -> Option<Node> {
+        self.consume();
+
         let mut items = Vec::new();
 
-        loop {
-            match self.parse() {
-                Some(node) => items.push(node),
-                None => break,
-            }
+        while let Some(item) = self.parse_node() {
+            items.push(item);
         }
 
-        items
+        if !self.expect(Token::RightParen) {
+            return None;
+        }
+
+        Some(Node::List(items))
     }
 }
 
-impl<'a> Iterator<Node<'a>> for Parser<'a> {
-    fn next(&mut self) -> Option<Node<'a>> {
+impl<R: Read> Iterator for Parser<R> {
+    type Item = Node;
+
+    fn next(&mut self) -> Option<Node> {
         self.parse()
     }
 }
 
 #[cfg(test)]
 mod test {
-    #![allow(unused_imports)]
+    use lexer::Lexer;
     use super::{Parser, Node};
 
-    fn test_expr<'a>(expr: &'a str, expected_result: Option<Node<'a>>) {
-        let result = Parser::new(expr).parse();
+    fn assert_expr(expr: &str, expected: Option<Node>) {
+        let lexer = Lexer::new(expr.as_bytes());
+        let mut parser = Parser::new(lexer);
 
-        if result != expected_result {
-            panic!("Mismatch expression result for `{}`. Expected: {}, got: {}", expr, expected_result, result);
-        }
+        assert_eq!(parser.parse(), expected);
     }
 
     #[test]
     fn test_simple() {
-        test_expr("", None);
-        test_expr("()", Some(Node::List(vec![])));
-        test_expr("(+ 1 1)", Some(Node::List(vec![Node::Atom("+"), Node::NumberLiteral(1.0), Node::NumberLiteral(1.0)])));
-        test_expr("(+ 1 (- 2 1))", Some(Node::List(vec![
-            Node::Atom("+"), Node::NumberLiteral(1.0),
+        assert_expr("", None);
+        assert_expr("()", Some(Node::List(vec![])));
+        assert_expr("(f 42 \"hello\")", Some(
             Node::List(vec![
-                Node::Atom("-"), Node::NumberLiteral(2.0),
-                Node::NumberLiteral(1.0),
-            ]),
-        ])));
+                Node::Atom("f".to_string()),
+                Node::Number(42.0),
+                Node::String("hello".to_string()),
+            ])
+        ));
     }
 }

@@ -1,72 +1,79 @@
 use std::fmt;
+use std::string::ToString;
 use parser::Node;
-use eval::context::Context;
+use super::context::Context;
 
-pub type BuiltinFn = for<'a> fn(ctx: &mut Context<'a>, args: &[Node<'a>]) -> Value<'a>;
+pub type BuiltinFn = fn(ctx: &mut Context, args: &[Node]) -> Option<Value>;
 
-#[deriving(Clone)]
-pub enum Value<'a> {
-    StringLiteral(String),
-    NumberLiteral(f64),
-    List(Vec<Value<'a>>),
-    Function(Context<'a>, Vec<String>, Node<'a>),
+pub enum Value {
+    String(String),
+    Number(f64),
+    List(Vec<Value>),
+    Function {
+        context: Context,
+        args: Vec<String>,
+        body: Node,
+    },
     BuiltinFunction(BuiltinFn),
 }
 
-impl<'a> Value<'a> {
-    pub fn from_node(node: &Node) -> Value<'a> {
-        match *node {
-            Node::Atom(name) => Value::StringLiteral(name.into_string()),
-            Node::StringLiteral(value) => Value::StringLiteral(value.into_string()),
-            Node::NumberLiteral(value) => Value::NumberLiteral(value),
-            Node::List(ref items) => {
-                let items: Vec<_> = items.iter().map(Value::from_node).collect();
-                Value::List(items)
-            }
-        }
+impl Value {
+    pub fn nil() -> Value {
+        Value::List(vec![])
     }
+}
 
-    pub fn to_node(&'a self) -> Option<Node<'a>> {
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Value::StringLiteral(ref value) => Some(Node::StringLiteral(value.as_slice())),
-            Value::NumberLiteral(value) => Some(Node::NumberLiteral(value)),
-            Value::List(..) => None,
-            Value::Function(..) => None,
-            Value::BuiltinFunction(..) => None,
+            Value::String(ref value) => write!(f, "String({:?})", value),
+            Value::Number(value) => write!(f, "Number({:?})", value),
+            Value::List(ref items) => write!(f, "List({:?})", items),
+            Value::Function { ref args, ref body, .. } => write!(f, "Function({:?}, {:?})", args, body),
+            Value::BuiltinFunction(function) => write!(f, "BuiltinFunction({:?})", function as *mut BuiltinFn),
         }
     }
 }
 
-impl<'a> Value<'a> {
-    pub fn nil() -> Value<'a> {
-        Value::List(Vec::new())
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Value::String(ref value) => write!(f, "{}", value),
+            Value::Number(value) => write!(f, "{}", value),
+            Value::List(ref items) => {
+                let items: Vec<_> = items.iter().map(ToString::to_string).collect();
+                write!(f, "{}", items.connect(" "))
+            }
+            Value::Function { .. } => write!(f, "<Function>"),
+            Value::BuiltinFunction(function) => write!(f, "<BuiltinFunction@{:?}>", function as *mut BuiltinFn),
+        }
     }
 }
 
-impl<'a> PartialEq for Value<'a> {
-    fn eq(&self, other: &Value<'a>) -> bool {
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
         match (self, other) {
-            (&Value::StringLiteral(ref left), &Value::StringLiteral(ref right)) => left == right,
-            (&Value::NumberLiteral(left), &Value::NumberLiteral(right)) => left == right,
-            (&Value::List(ref left), &Value::List(ref right)) => left == right,
-            (&Value::Function(_, ref left_args, ref left_body), &Value::Function(_, ref right_args, ref right_body)) => left_args == right_args && left_body == right_body,
+            (&Value::String(ref left), &Value::String(ref right)) => left.eq(right),
+            (&Value::Number(left), &Value::Number(right)) => left == right,
+            (&Value::List(ref left), &Value::List(ref right)) => left.eq(right),
             (&Value::BuiltinFunction(left), &Value::BuiltinFunction(right)) => left as *mut BuiltinFn == right as *mut BuiltinFn,
             _ => false,
         }
     }
 }
 
-impl<'a> fmt::Show for Value<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Clone for Value {
+    fn clone(&self) -> Value {
         match *self {
-            Value::StringLiteral(ref value) => write!(f, "\"{}\"", value),
-            Value::NumberLiteral(value) => write!(f, "{}", value),
-            Value::List(ref items) => {
-                let reprs: Vec<_> = items.iter().map(|item| format!("{}", item)).collect();
-                write!(f, "({})", reprs.connect(" "))
-            }
-            Value::Function(_, ref args, ref body) => write!(f, "{} -> {}", args, body.to_src()),
-            Value::BuiltinFunction(_) => write!(f, "BuiltinFunction"),
+            Value::String(ref value) => Value::String(value.clone()),
+            Value::Number(value) => Value::Number(value),
+            Value::List(ref items) => Value::List(items.clone()),
+            Value::Function { ref context, ref args, ref body } => Value::Function {
+                context: context.clone(),
+                args: args.clone(),
+                body: body.clone(),
+            },
+            Value::BuiltinFunction(f) => Value::BuiltinFunction(f),
         }
     }
 }

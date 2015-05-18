@@ -1,161 +1,229 @@
-#[deriving(Clone, Show, PartialEq)]
-pub enum Token<'a> {
+use std::io::prelude::*;
+use std::io::BufReader;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Token {
     LeftParen, RightParen,
-    Atom(&'a str),
-    StringLiteral(&'a str),
-    NumberLiteral(f64),
+    Ident(String),
+    String(String),
+    Number(f64),
 }
 
-#[deriving(Clone)]
-pub struct Lexer<'a> {
-    input: &'a str,
-    index: uint,
-    pub current: Option<Token<'a>>,
+pub struct Lexer<R: Read> {
+    reader: BufReader<R>,
+    current: Option<char>,
 }
 
-impl<'a> Lexer<'a> {
-    pub fn new(input: &'a str) -> Lexer<'a> {
-        Lexer {
-            input: input,
-            index: 0,
-            current: None,
-        }
-    }
-
-    /// Consume one token. Return previous token.
-    pub fn consume(&mut self) -> Option<Token<'a>> {
-        let previous = self.current.take();
-
-        self.skip();
-
-        if self.index < self.input.len() {
-            self.current = self.read_token();
-        }
-
-        previous
+fn unescape_char(c: char) -> Option<char> {
+    match c {
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        _ => None,
     }
 }
 
-impl<'a> Lexer<'a> {
-    fn skip(&mut self) {
-        while self.index < self.input.len() {
-            match self.input.char_at(self.index) {
-                ' ' | '\t' | '\n' | '\r' => {
-                    self.index += 1;
-                }
-                ';' => {
-                    while self.index < self.input.len() && self.input.char_at(self.index) != '\n' {
-                        self.index += 1;
+fn unescape_str(src: &str) -> String {
+    let mut dst = String::new();
+
+    let mut chars = src.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(c) = chars.next() {
+                    if let Some(c) = unescape_char(c) {
+                        dst.push(c);
+                    } else {
+                        dst.push('\\');
+                        dst.push(c);
                     }
+                } else {
+                    dst.push('\\');
                 }
-                _ => break,
             }
+            c => dst.push(c),
         }
     }
 
-    fn read_token(&mut self) -> Option<Token<'a>> {
-        match self.input.char_at(self.index) {
-            '(' | ')' => self.read_paren(),
-            '0'...'9' => self.read_number(),
-            '"' => self.read_string(),
-            _ => self.read_atom(),
-        }
+    dst
+}
+
+const SEPARATORS: &'static [char] = &[' ', '\t', '\r', '\n'];
+
+impl<R: Read> Lexer<R> {
+    pub fn new(reader: R) -> Lexer<R> {
+        let mut lexer = Lexer {
+            reader: BufReader::new(reader),
+            current: None,
+        };
+        lexer.consume();
+        lexer
     }
 
-    fn read_paren(&mut self) -> Option<Token<'a>> {
-        let token = if self.input.char_at(self.index) == '(' {
-            Some(Token::LeftParen)
+    pub fn current(&self) -> Option<char> {
+        self.current
+    }
+
+    fn consume(&mut self) -> Option<char> {
+        let current = self.current;
+        self.current = self.reader.by_ref().chars().next().and_then(Result::ok);
+        current
+    }
+
+    fn expect(&mut self, c: char) -> bool {
+        if self.current() == Some(c) {
+            self.consume();
+            true
         } else {
-            Some(Token::RightParen)
+            false
+        }
+    }
+
+    fn read_token(&mut self) -> Option<Token> {
+        self.skip_separators();
+
+        let current = match self.current() {
+            Some(c) => c,
+            None => return None,
         };
 
-        self.index += 1;
-        token
+        match current {
+            '(' | ')' => self.read_paren(),
+            '"' => self.read_string(),
+            '0'...'9' => self.read_number(),
+            _ => self.read_ident(),
+        }
     }
 
-    fn read_number(&mut self) -> Option<Token<'a>> {
-        let start = self.index;
-
-        while self.index < self.input.len() {
-            match self.input.char_at(self.index) {
-                '0'...'9' | '.' => {
-                    self.index += 1;
-                }
+    fn skip_separators(&mut self) {
+        while let Some(c) = self.current() {
+            match c {
+                c if SEPARATORS.contains(&c) => {}
                 _ => break,
             }
+
+            self.consume();
         }
-
-        let value = self.input.slice(start, self.index);
-        let value = from_str(value).unwrap();
-
-        Some(Token::NumberLiteral(value))
     }
 
-    fn read_string(&mut self) -> Option<Token<'a>> {
-        self.index += 1;
-        let start = self.index;
-
-        while self.index < self.input.len()
-            && self.input.char_at(self.index) != '"' {
-            self.index += 1;
-        }
-
-        let value = self.input.slice(start, self.index);
-        self.index += 1;
-
-        Some(Token::StringLiteral(value))
-    }
-
-    fn read_atom(&mut self) -> Option<Token<'a>> {
-        let start = self.index;
-
-        while self.index < self.input.len() {
-            match self.input.char_at(self.index) {
-                ' ' | '\t' | '\n' | '\r' | '(' | ')' => break,
-                _ => {
-                    self.index += 1;
-                }
+    fn read_paren(&mut self) -> Option<Token> {
+        match self.current() {
+            Some('(') => {
+                self.consume();
+                Some(Token::LeftParen)
             }
+            Some(')') => {
+                self.consume();
+                Some(Token::RightParen)
+            }
+            _ => None,
+        }
+    }
+
+    fn read_string(&mut self) -> Option<Token> {
+        self.consume();
+
+        let mut value = String::new();
+
+        while let Some(c) = self.current() {
+            match c {
+                '"' => break,
+                c => value.push(c),
+            }
+
+            self.consume();
         }
 
-        let name = self.input.slice(start, self.index);
+        if !self.expect('"') {
+            return None;
+        }
 
-        Some(Token::Atom(name))
+        Some(Token::String(unescape_str(&value)))
+    }
+
+    fn read_number(&mut self) -> Option<Token> {
+        let mut value = String::new();
+
+        while let Some(c) = self.current() {
+            match c {
+                '0'...'9' | '.' => value.push(c),
+                _ => break,
+            }
+
+            self.consume();
+        }
+
+        value.parse().map(|value| Token::Number(value)).ok()
+    }
+
+    fn read_ident(&mut self) -> Option<Token> {
+        let mut name = String::new();
+
+        while let Some(c) = self.current() {
+            match c {
+                ')' => break,
+                c if SEPARATORS.contains(&c) => break,
+                c => name.push(c),
+            }
+
+            self.consume();
+        }
+
+        Some(Token::Ident(name))
     }
 }
 
-impl<'a> Iterator<Token<'a>> for Lexer<'a> {
-    fn next(&mut self) -> Option<Token<'a>> {
-        self.consume();
-        self.current.clone()
+impl<R: Read> Iterator for Lexer<R> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Token> {
+        self.read_token()
     }
 }
 
 #[cfg(test)]
 mod test {
-    #![allow(unused_imports)]
-    use super::{Lexer, Token};
+    use super::{Token, Lexer};
 
-    fn test_expr<'a>(expr: &'a str, expected_result: &[Token<'a>]) {
-        let result: Vec<Token> = Lexer::new(expr).collect();
+    fn assert_tokens(expr: &str, expected: &[Token]) {
+        let lexer = Lexer::new(expr.as_bytes());
+        let tokens: Vec<_> = lexer.collect();
 
-        if result.as_slice() != expected_result {
-            panic!("Mismatch expression result for `{}`. Expected: {}, got: {}", expr, expected_result, result);
-        }
+        assert_eq!(tokens, expected);
     }
 
     #[test]
-    fn test_simple() {
-        test_expr("", &[]);
-        test_expr("()", &[Token::LeftParen, Token::RightParen]);
-        test_expr("(+ 1 1)", &[Token::LeftParen, Token::Atom("+"), Token::NumberLiteral(1.0), Token::NumberLiteral(1.0), Token::RightParen]);
-        test_expr("(print \"hello\")", &[Token::LeftParen, Token::Atom("print"), Token::StringLiteral("hello"), Token::RightParen]);
-        test_expr("(print a)", &[Token::LeftParen, Token::Atom("print"), Token::Atom("a"), Token::RightParen]);
+    fn test_simples() {
+        assert_tokens("()", &[
+            Token::LeftParen,
+            Token::RightParen,
+        ]);
+
+        assert_tokens("(f 42 \"hello\")", &[
+            Token::LeftParen,
+            Token::Ident("f".to_string()),
+            Token::Number(42.0),
+            Token::String("hello".to_string()),
+            Token::RightParen,
+        ]);
     }
 
     #[test]
-    fn test_comment() {
-        test_expr("; toto", &[]);
-        test_expr("(print   ; Something\n a)", &[Token::LeftParen, Token::Atom("print"), Token::Atom("a"), Token::RightParen]);
+    fn test_unary_list() {
+        assert_tokens("(toto)", &[
+            Token::LeftParen,
+            Token::Ident("toto".to_string()),
+            Token::RightParen,
+        ]);
+    }
+
+    #[test]
+    fn test_newline() {
+        assert_tokens("(toto\ntata)", &[
+            Token::LeftParen,
+            Token::Ident("toto".to_string()),
+            Token::Ident("tata".to_string()),
+            Token::RightParen,
+        ]);
     }
 }

@@ -1,9 +1,5 @@
-#![feature(phase, macro_rules, if_let, while_let)]
-#![experimental]
+#![feature(convert, io, slice_patterns)]
 
-#[phase(plugin, link)]
-extern crate log;
-
+pub mod eval;
 pub mod lexer;
 pub mod parser;
-pub mod eval;

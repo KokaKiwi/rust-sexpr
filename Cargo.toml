@@ -1,7 +1,8 @@
 [package]
 
 name = "sexpr"
-version = "0.1.0"
-authors = [
-    "KokaKiwi <kokakiwi@kokakiwi.net>",
-]
+version = "0.0.1"
+authors = [ "KokaKiwi <kokakiwi@kokakiwi.net>" ]
+
+[dependencies]
+jit = "*"
